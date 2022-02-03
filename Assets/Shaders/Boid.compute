@@ -1,0 +1,116 @@
+#pragma kernel UpdateBoid
+
+cbuffer Constants
+{
+	float alignmentSqrDistance;
+	float maxVelocityMagnitude;
+	float separationSqrDistance;
+	float separationWeight;
+	float sightAngle;
+	float speed;
+	uint totalCount;
+
+	float padding;
+};
+
+struct BoidData
+{
+	float3 position;
+	float3 velocity;
+};
+
+RWStructuredBuffer<BoidData> boids;
+float deltaTime;
+
+float3 ClampMagnitude(float3 vec, float maxMagnitude)
+{
+	float sqrMagnitude = dot(vec, vec);
+
+	if (sqrMagnitude > maxMagnitude * maxMagnitude)
+		vec *= maxMagnitude / sqrt(sqrMagnitude);
+	return vec;
+}
+
+[numthreads(256, 1, 1)]
+void UpdateBoid(uint3 id : SV_DispatchThreadID)
+{
+	uint index = id.x;
+
+	float3 currentBoidPosition = boids[index].position;
+
+	float3 acceleration = float3(0, 0, 0);
+	float3 separationVelocity = float3(0, 0, 0);
+	float3 alignmentVelocity = float3(0, 0, 0);
+	float3 cohesionTarget = float3(0, 0, 0);
+	int separationCount = 0;
+	int alignmentCount = 0;
+
+	float3 offset;
+	float sqrDistance;
+
+	// On boucle sur tous les boids
+
+	for (uint otherIndex = 0; otherIndex < totalCount; ++otherIndex)
+	{
+		if (otherIndex != index)
+		{
+			offset = currentBoidPosition - boids[otherIndex].position;
+			sqrDistance = dot(offset, offset);
+
+			// Est-ce que ce boid est dans la zone de voisinage ?
+
+			if (sqrDistance <= alignmentSqrDistance)
+			{
+				alignmentVelocity += boids[otherIndex].velocity;
+				cohesionTarget += boids[otherIndex].position;
+
+				++alignmentCount;
+
+				// Est-ce que ce boid est trop proche ?
+
+				if (sqrDistance <= separationSqrDistance)
+				{
+					separationVelocity += offset / sqrDistance;
+
+					++separationCount;
+				}
+			}
+		}
+	}
+
+	if (separationCount > 0)
+	{
+		// Calcul de la velocite de separation
+
+		separationVelocity /= separationCount;
+		separationVelocity /= length(separationVelocity);
+
+		acceleration += ClampMagnitude(separationVelocity - boids[index].velocity, maxVelocityMagnitude) * separationWeight;
+	}
+
+	if (alignmentCount > 0)
+	{
+		// Calcul de la velocite d'alignement
+
+		alignmentVelocity /= alignmentCount;
+		alignmentVelocity /= length(alignmentVelocity);
+
+		// Calcul de la velocite de cohesion
+
+		float3 cohesionVelocity = cohesionTarget - currentBoidPosition;
+
+		cohesionVelocity /= alignmentCount;
+		cohesionVelocity /= length(cohesionVelocity);
+
+		acceleration += ClampMagnitude(alignmentVelocity - boids[index].velocity, maxVelocityMagnitude) + ClampMagnitude(cohesionVelocity - boids[index].velocity, maxVelocityMagnitude);
+	}
+
+	// Application de l'acceleration
+
+	boids[index].velocity += acceleration * deltaTime;
+	boids[index].position += boids[index].velocity * speed * deltaTime;
+
+	// Si le boid se trouve hors de la zone, on le renvoie a l'oppose
+
+	if (length(boids[index].position) > 50) boids[index].position = ClampMagnitude(-boids[index].position, 50 - 1);
+}
